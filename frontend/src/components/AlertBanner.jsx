@@ -1,30 +1,75 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { AlertTriangle } from 'lucide-react';
 
 const AlertBanner = ({ alert, currentPressure }) => {
+  const audioCtxRef = useRef(null);
+  const unlockedRef = useRef(false);
+
+  const getAudioContext = () => {
+    if (audioCtxRef.current) return audioCtxRef.current;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    audioCtxRef.current = new Ctx();
+    return audioCtxRef.current;
+  };
+
+  useEffect(() => {
+    const unlockAudio = async () => {
+      unlockedRef.current = true;
+      const ctx = getAudioContext();
+      if (ctx && ctx.state === 'suspended') {
+        try {
+          await ctx.resume();
+        } catch (err) {
+          console.error('[ALERT_AUDIO] Failed to resume context:', err);
+        }
+      }
+    };
+
+    window.addEventListener('pointerdown', unlockAudio, { once: true });
+    window.addEventListener('keydown', unlockAudio, { once: true });
+    window.addEventListener('touchstart', unlockAudio, { once: true });
+
+    return () => {
+      window.removeEventListener('pointerdown', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+    };
+  }, []);
+
   useEffect(() => {
     if (!alert) return;
+    const pressureNow = Number.isFinite(currentPressure) ? currentPressure : Number(alert.pressure_index || 0);
+    const shouldPlaySound = pressureNow >= 70 || alert.status === 'active';
+    if (!shouldPlaySound) return;
 
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    
-    const playBeep = () => {
+    const playBeep = async () => {
+      if (!unlockedRef.current || document.hidden) return;
+      const audioCtx = getAudioContext();
+      if (!audioCtx) return;
+
       if (audioCtx.state === 'suspended') {
-        audioCtx.resume();
+        try {
+          await audioCtx.resume();
+        } catch (err) {
+          console.error('[ALERT_AUDIO] Failed to resume before beep:', err);
+          return;
+        }
       }
-      
+
       const oscillator = audioCtx.createOscillator();
       const gainNode = audioCtx.createGain();
-      
+
       oscillator.type = 'square';
       oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // A5
       oscillator.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.1); // Drop to A4
-      
+
       gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
       gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
-      
+
       oscillator.connect(gainNode);
       gainNode.connect(audioCtx.destination);
-      
+
       oscillator.start();
       oscillator.stop(audioCtx.currentTime + 0.5);
     };
@@ -32,14 +77,19 @@ const AlertBanner = ({ alert, currentPressure }) => {
     // Play immediately and then interval
     playBeep();
     const interval = setInterval(playBeep, 2000);
-    
+
     return () => {
       clearInterval(interval);
-      if (audioCtx.state !== 'closed') {
-        audioCtx.close().catch(e => console.error(e));
+    };
+  }, [alert, currentPressure]);
+
+  useEffect(() => {
+    return () => {
+      if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
+        audioCtxRef.current.close().catch((err) => console.error('[ALERT_AUDIO] Failed to close context:', err));
       }
     };
-  }, [alert]);
+  }, []);
 
   if (!alert) return null;
 
