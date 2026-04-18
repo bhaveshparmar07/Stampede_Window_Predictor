@@ -18,7 +18,7 @@ import math
 # Default locations — used if CSV lacks a location column
 DEFAULT_LOCATIONS = ["Ambaji", "Dwarka", "Somnath", "Pavagadh"]
 
-API_URL = "http://localhost:8000/api/ingest"
+API_URL = "http://localhost:8080/api/ingest"
 
 
 def clean_value(v):
@@ -102,7 +102,7 @@ def main():
             pressure = data.get("pressure_index", "?")
             risk = data.get("risk_level", "?")
             classification = data.get("classification", "?")
-            alert = "🚨 ALERT!" if data.get("alert_triggered") else ""
+            alert = "[ALERT!]" if data.get("alert_triggered") else ""
 
             print(
                 f"[{i+1}/{len(df)}] {loc:>10} | "
@@ -113,7 +113,7 @@ def main():
             success_count += 1
 
         except requests.exceptions.ConnectionError:
-            print(f"[{i+1}/{len(df)}] CONNECTION ERROR — is the backend running on {args.api_url}?")
+            print(f"[{i+1}/{len(df)}] CONNECTION ERROR -- is the backend running on {args.api_url}?")
             error_count += 1
             if error_count > 5:
                 print("[STREAM] Too many connection errors. Stopping.")
