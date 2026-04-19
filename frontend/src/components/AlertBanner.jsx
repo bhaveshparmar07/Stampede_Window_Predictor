@@ -92,6 +92,10 @@ const AlertBanner = ({ alert, currentPressure }) => {
   }, []);
 
   if (!alert) return null;
+  const smsSent = !!alert.sms_sent;
+  const smsDueAt = alert.sms_due_at ? new Date(alert.sms_due_at) : null;
+  const now = new Date();
+  const secondsToSms = smsDueAt ? Math.max(0, Math.ceil((smsDueAt.getTime() - now.getTime()) / 1000)) : null;
 
   return (
     <div className="w-full bg-red-600 text-white rounded-lg shadow-lg shadow-red-900/50 mb-6 overflow-hidden border border-red-500 flex flex-col md:flex-row items-center justify-between animate-in fade-in slide-in-from-top-4 duration-300">
@@ -107,7 +111,14 @@ const AlertBanner = ({ alert, currentPressure }) => {
           </h2>
           <p className="text-red-200 mt-1 font-medium">
             Triggered at 70+ • Current Live Pressure: <span className="text-white font-bold text-lg">{currentPressure !== undefined ? currentPressure.toFixed(1) : alert.pressure_index}</span> • 
-            Status: <span className="text-white font-bold">{currentPressure < 40 ? 'RESOLVING (Awaiting Acknowledgment)' : alert.classification}</span>
+            Status: <span className="text-white font-bold">{alert.classification}</span>
+          </p>
+          <p className="text-red-200 mt-1 text-sm">
+            {smsSent ? (
+              <span className="text-white font-bold">SMS escalation sent</span>
+            ) : secondsToSms != null ? (
+              <span>SMS escalation in <span className="text-white font-bold">{secondsToSms}s</span> if no acknowledgement</span>
+            ) : null}
           </p>
         </div>
       </div>

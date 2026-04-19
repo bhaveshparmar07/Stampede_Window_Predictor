@@ -1,5 +1,6 @@
 import React from 'react';
 import { PRESSURE_THRESHOLDS } from '../utils/constants';
+import { useTheme } from '../context/ThemeContext';
 
 const getThreshold = (value) => {
   if (value < PRESSURE_THRESHOLDS.watch.min) return PRESSURE_THRESHOLDS.safe;
@@ -8,6 +9,7 @@ const getThreshold = (value) => {
 };
 
 const PressureGauge = ({ value = 0, size = "md" }) => {
+  const { isDarkMode } = useTheme();
   const threshold = getThreshold(value);
   const percentage = Math.min(Math.max(value, 0), 100);
   
@@ -40,7 +42,7 @@ const PressureGauge = ({ value = 0, size = "md" }) => {
             cy="50"
             r={radius}
             fill="transparent"
-            stroke="#1e293b"
+            stroke={isDarkMode ? "#1e293b" : "#e2e8f0"}
             strokeWidth="10"
             strokeDasharray={`${arcLength} ${circumference}`}
             strokeLinecap="round"
@@ -62,10 +64,10 @@ const PressureGauge = ({ value = 0, size = "md" }) => {
         
         {/* Value text */}
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className={`font-bold tabular-nums ${textClasses[size]}`} style={{ color: threshold.color }}>
+          <span className={`font-black tabular-nums ${textClasses[size]}`} style={{ color: threshold.color }}>
             {Math.round(value)}
           </span>
-          <span className="text-xs text-slate-500 font-medium uppercase tracking-wider mt-1">
+          <span className={`text-[10px] font-black uppercase tracking-widest mt-1 ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
             Index
           </span>
         </div>

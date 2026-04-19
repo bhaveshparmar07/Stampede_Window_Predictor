@@ -13,6 +13,18 @@ export const WebSocketProvider = ({ children }) => {
     flow_history: {},
     locations: [],
     timestamp: null,
+    // Scenario extensions
+    aarti_context: {},
+    calendar_context: {},
+    event_context: {},
+    auspicious_context: {},
+    procession_status: {},
+    anomaly_data: {},
+    counter_flow: {},
+    cluster_data: {},
+    toll_status: [],
+    transit_status: {},
+    zone_status: {},
   });
   
   const [isConnected, setIsConnected] = useState(false);
@@ -30,7 +42,10 @@ export const WebSocketProvider = ({ children }) => {
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === 'state_update') {
-          setData(msg.data);
+          setData(prev => ({
+            ...prev,
+            ...msg.data,
+          }));
         } else if (msg.type === 'pong') {
           // Heartbeat response
         }
