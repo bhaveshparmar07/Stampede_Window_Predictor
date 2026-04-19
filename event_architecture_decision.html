@@ -1,0 +1,258 @@
+
+<style>
+*{box-sizing:border-box;font-size:13px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+.col{background:var(--color-background-secondary);border-radius:var(--border-radius-lg);padding:12px}
+.col-title{font-size:10px;font-weight:500;letter-spacing:.05em;text-transform:uppercase;color:var(--color-text-secondary);margin:0 0 10px}
+.entity{border-radius:6px;padding:7px 10px;margin-bottom:6px;border-left:3px solid}
+.e-temple{border-color:#4ade80;background:rgba(74,222,128,.06)}
+.e-stadium{border-color:#60a5fa;background:rgba(96,165,250,.06)}
+.e-procession{border-color:#a78bfa;background:rgba(167,139,250,.06)}
+.e-rally{border-color:#f87171;background:rgba(248,113,113,.06)}
+.e-social{border-color:#fbbf24;background:rgba(251,191,36,.06)}
+.e-strike{border-color:#f97316;background:rgba(249,115,22,.06)}
+.e-mela{border-color:#34d399;background:rgba(52,211,153,.06)}
+.e-name{font-size:12px;font-weight:500;color:var(--color-text-primary);margin-bottom:2px}
+.e-example{font-size:10px;color:var(--color-text-secondary)}
+.signal-tag{display:inline-block;font-size:9px;padding:1px 5px;border-radius:3px;margin:2px 2px 0 0;background:var(--color-background-primary);border:0.5px solid var(--color-border-secondary);color:var(--color-text-secondary)}
+.divider{height:0.5px;background:var(--color-border-tertiary);margin:12px 0}
+.rule-box{border-radius:6px;padding:8px 10px;margin-bottom:6px}
+.rule-green{background:rgba(74,222,128,.06);border:0.5px solid rgba(74,222,128,.2)}
+.rule-amber{background:rgba(251,191,36,.06);border:0.5px solid rgba(251,191,36,.2)}
+.rule-title{font-size:10px;font-weight:500;margin-bottom:3px}
+.rule-text{font-size:11px;color:var(--color-text-secondary);line-height:1.5}
+.mock-sidebar{background:#0f1117;border-radius:8px;padding:10px;min-height:320px}
+.mock-section{font-size:8px;letter-spacing:.06em;color:#555;text-transform:uppercase;margin:0 0 5px;padding:0 4px}
+.mock-loc{border-radius:5px;padding:6px 8px;margin-bottom:4px;background:rgba(255,255,255,.04)}
+.mock-loc.sel{background:rgba(83,74,183,.2);border:0.5px solid rgba(83,74,183,.4)}
+.mock-loc-name{font-size:11px;font-weight:500;color:#c9c6e0;margin-bottom:1px}
+.mock-loc-sub{font-size:9px;color:#888}
+.mock-badge{font-size:8px;padding:1px 5px;border-radius:3px;font-weight:500;margin-top:3px;display:inline-block}
+.b-safe{background:rgba(74,222,128,.12);color:#4ade80}
+.b-watch{background:rgba(251,191,36,.12);color:#fbbf24}
+.b-crit{background:rgba(248,113,113,.12);color:#f87171}
+.b-live{background:rgba(96,165,250,.12);color:#60a5fa}
+.b-proc{background:rgba(167,139,250,.12);color:#a78bfa}
+.b-social{background:rgba(251,191,36,.12);color:#fbbf24}
+.sep{height:6px;margin:6px 0}
+.signal-badge{display:inline-block;font-size:8px;padding:1px 4px;border-radius:3px;margin-right:3px;background:rgba(248,113,113,.12);color:#f87171}
+</style>
+
+<div class="row">
+  <div class="col">
+    <div class="col-title">What gets its own sidebar entry</div>
+    <div class="e-name" style="font-size:11px;color:var(--color-text-secondary);margin-bottom:8px">Any location where a crowd actively EXISTS</div>
+    <div class="entity e-temple">
+      <div class="e-name">Temple / shrine</div>
+      <div class="e-example">Ambaji · Dwarka · Somnath · Pavagadh</div>
+      <div style="margin-top:4px">
+        <span class="signal-tag">pressure_index</span><span class="signal-tag">queue_density</span>
+        <span class="signal-tag">aarti_timing</span><span class="signal-tag">darshan_tokens</span>
+        <span class="signal-tag">corridor_width</span>
+      </div>
+    </div>
+    <div class="entity e-stadium">
+      <div class="e-name">Stadium / arena</div>
+      <div class="e-example">NM Stadium IPL · GMDC Ground rally</div>
+      <div style="margin-top:4px">
+        <span class="signal-tag">gate_flow_pax_min</span><span class="signal-tag">parking_fill_pct</span>
+        <span class="signal-tag">match_schedule</span><span class="signal-tag">dispersal_wave_ETA</span>
+      </div>
+    </div>
+    <div class="entity e-procession">
+      <div class="e-name">Procession / Rath Yatra</div>
+      <div class="e-example">Rath Yatra Dwarka · Bhadarvi Poonam</div>
+      <div style="margin-top:4px">
+        <span class="signal-tag">route_segment_density</span><span class="signal-tag">march_velocity</span>
+        <span class="signal-tag">next_junction_ETA</span><span class="signal-tag">route_progress_pct</span>
+      </div>
+    </div>
+    <div class="entity e-rally">
+      <div class="e-name">Political rally / protest</div>
+      <div class="e-example">BJP rally Ahmedabad · farmer protest</div>
+      <div style="margin-top:4px">
+        <span class="signal-tag">stage_perimeter_density</span><span class="signal-tag">crowd_radius_m</span>
+        <span class="signal-tag">estimated_attendance</span><span class="signal-tag">scheduled_end</span>
+      </div>
+    </div>
+    <div class="entity e-social">
+      <div class="e-name">Social gathering / parade</div>
+      <div class="e-example">Victory parade · award celebration · flash mob</div>
+      <div style="margin-top:4px">
+        <span class="signal-tag">area_coverage_m2</span><span class="signal-tag">crowd_velocity</span>
+        <span class="signal-tag">flash_factor</span><span class="signal-tag">social_trigger</span>
+      </div>
+    </div>
+    <div class="entity e-strike">
+      <div class="e-name">Strike / road disruption</div>
+      <div class="e-example">Bandh · NH947 blocked · accident closure</div>
+      <div style="margin-top:4px">
+        <span class="signal-tag">blocked_routes</span><span class="signal-tag">alternate_capacity</span>
+        <span class="signal-tag">affected_zone_km</span><span class="signal-tag">ETA_clearance</span>
+      </div>
+    </div>
+    <div class="entity e-mela">
+      <div class="e-name">Mela / fair ground</div>
+      <div class="e-example">Tarnetar Mela · Shamlaji Mela</div>
+      <div style="margin-top:4px">
+        <span class="signal-tag">stall_density</span><span class="signal-tag">entry_exit_ratio</span>
+        <span class="signal-tag">day_of_mela</span><span class="signal-tag">food_court_cluster</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="col-title">Correlation rules — what appears where</div>
+    <div class="rule-box rule-green">
+      <div class="rule-title" style="color:var(--color-text-success)">Appears as signal IN temple panel</div>
+      <div class="rule-text">Event is within correlation radius AND crowd from that event flows toward temple.<br><br>
+        IPL ends at NM Stadium → 130km → Ambaji corridor receives post-match dispersal wave.<br>
+        Rath Yatra route passes near Dwarka temple gate → corridor blocked signal.<br>
+        NH947 bandh → diverted traffic compresses Khedbrahma toll → Ambaji ETA signal.
+      </div>
+    </div>
+    <div class="rule-box rule-amber">
+      <div class="rule-title" style="color:var(--color-text-warning)">Stays as standalone in sidebar ONLY</div>
+      <div class="rule-text">Event has its own crowd. No crowd flows from it toward any temple.<br><br>
+        Victory parade in Surat → no temple within 50km radius.<br>
+        Political rally in Vadodara → dispersal routes don't cross any pilgrimage corridor.<br>
+        Mela at Tarnetar → self-contained site, no pilgrim overlap.
+      </div>
+    </div>
+    <div class="rule-box" style="background:rgba(248,113,113,.06);border:0.5px solid rgba(248,113,113,.2)">
+      <div class="rule-title" style="color:var(--color-text-danger)">Both — sidebar entry AND temple signal</div>
+      <div class="rule-text">Event has its own crowd AND that crowd correlates to a temple.<br><br>
+        Procession active on Dwarka temple street → sidebar shows procession status, temple panel shows corridor_blocked_pct.<br>
+        IPL post-match → sidebar shows stadium dispersal, Ambaji panel shows incoming_crowd_ETA.
+      </div>
+    </div>
+    <div class="divider"></div>
+    <div class="col-title">Correlation radius by event type</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">
+      <div style="padding:5px 8px;background:var(--color-background-primary);border-radius:5px;border:0.5px solid var(--color-border-tertiary)">
+        <div style="color:var(--color-text-secondary);margin-bottom:2px;font-size:9px">Stadium / arena</div>
+        <div style="font-weight:500">200 km</div>
+        <div style="font-size:9px;color:var(--color-text-tertiary)">post-match dispersal</div>
+      </div>
+      <div style="padding:5px 8px;background:var(--color-background-primary);border-radius:5px;border:0.5px solid var(--color-border-tertiary)">
+        <div style="color:var(--color-text-secondary);margin-bottom:2px;font-size:9px">Procession route</div>
+        <div style="font-weight:500">1 km</div>
+        <div style="font-size:9px;color:var(--color-text-tertiary)">route passes near temple</div>
+      </div>
+      <div style="padding:5px 8px;background:var(--color-background-primary);border-radius:5px;border:0.5px solid var(--color-border-tertiary)">
+        <div style="color:var(--color-text-secondary);margin-bottom:2px;font-size:9px">Political rally</div>
+        <div style="font-weight:500">500 m</div>
+        <div style="font-size:9px;color:var(--color-text-tertiary)">approach roads shared</div>
+      </div>
+      <div style="padding:5px 8px;background:var(--color-background-primary);border-radius:5px;border:0.5px solid var(--color-border-tertiary)">
+        <div style="color:var(--color-text-secondary);margin-bottom:2px;font-size:9px">Strike / bandh</div>
+        <div style="font-weight:500">Any</div>
+        <div style="font-size:9px;color:var(--color-text-tertiary)">if road is approach route</div>
+      </div>
+      <div style="padding:5px 8px;background:var(--color-background-primary);border-radius:5px;border:0.5px solid var(--color-border-tertiary)">
+        <div style="color:var(--color-text-secondary);margin-bottom:2px;font-size:9px">Social / parade</div>
+        <div style="font-weight:500">1 km</div>
+        <div style="font-size:9px;color:var(--color-text-tertiary)">route overlap</div>
+      </div>
+      <div style="padding:5px 8px;background:var(--color-background-primary);border-radius:5px;border:0.5px solid var(--color-border-tertiary)">
+        <div style="color:var(--color-text-secondary);margin-bottom:2px;font-size:9px">Mela / fair</div>
+        <div style="font-weight:500">5 km</div>
+        <div style="font-size:9px;color:var(--color-text-tertiary)">shared access road</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col">
+    <div class="col-title">New sidebar structure</div>
+    <div class="mock-sidebar">
+      <div class="mock-section">Monitored temples (4)</div>
+      <div class="mock-loc sel">
+        <div class="mock-loc-name">Ambaji</div>
+        <div style="display:flex;gap:4px;align-items:center">
+          <span style="font-size:15px;font-weight:500;color:#fbbf24">47</span>
+          <span class="mock-badge b-watch">WATCH</span>
+          <span class="signal-badge">4 signals</span>
+        </div>
+      </div>
+      <div class="mock-loc">
+        <div class="mock-loc-name">Dwarka</div>
+        <div style="display:flex;gap:4px;align-items:center">
+          <span style="font-size:15px;font-weight:500;color:#f87171">78</span>
+          <span class="mock-badge b-crit">CRITICAL</span>
+          <span class="signal-badge">2 signals</span>
+        </div>
+      </div>
+      <div class="mock-loc">
+        <div class="mock-loc-name">Somnath</div>
+        <div><span style="font-size:15px;font-weight:500;color:#4ade80">28</span> <span class="mock-badge b-safe">SAFE</span></div>
+      </div>
+      <div class="mock-loc">
+        <div class="mock-loc-name">Pavagadh</div>
+        <div><span style="font-size:15px;font-weight:500;color:#4ade80">12</span> <span class="mock-badge b-safe">SAFE</span></div>
+      </div>
+      <div class="sep"></div>
+      <div class="mock-section">Active events (3)</div>
+      <div class="mock-loc" style="border-left:2px solid #60a5fa">
+        <div class="mock-loc-name">IPL · NM Stadium</div>
+        <div style="display:flex;gap:4px;align-items:center">
+          <span class="mock-badge b-live">LIVE</span>
+          <span class="mock-loc-sub">ends 22:30 · affects Ambaji</span>
+        </div>
+      </div>
+      <div class="mock-loc" style="border-left:2px solid #a78bfa">
+        <div class="mock-loc-name">Rath Yatra · Dwarka</div>
+        <div style="display:flex;gap:4px;align-items:center">
+          <span class="mock-badge b-proc">PROCESSION</span>
+          <span class="mock-loc-sub">80% block · 2 hr remain</span>
+        </div>
+      </div>
+      <div class="mock-loc" style="border-left:2px solid #fbbf24">
+        <div class="mock-loc-name">Victory Parade · Ahmedabad</div>
+        <div style="display:flex;gap:4px;align-items:center">
+          <span class="mock-badge b-social">SOCIAL</span>
+          <span class="mock-loc-sub">standalone · no temple overlap</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="col-title">Center panel — changes by entity type selected</div>
+    <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:6px;padding:8px 10px;margin-bottom:8px">
+      <div style="font-size:10px;font-weight:500;color:var(--color-text-success)">When TEMPLE selected</div>
+      <div style="font-size:11px;color:var(--color-text-secondary);margin-top:4px;line-height:1.6">
+        Pressure gauge · Crush countdown · Aarti countdown<br>
+        Active scenario signals list · Approach corridor panel<br>
+        Flow direction chart · Agency action cards · AI triage
+      </div>
+    </div>
+    <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:6px;padding:8px 10px;margin-bottom:8px">
+      <div style="font-size:10px;font-weight:500;color:var(--color-text-info)">When STADIUM selected</div>
+      <div style="font-size:11px;color:var(--color-text-secondary);margin-top:4px;line-height:1.6">
+        Match status · Attendance fill gauge · Gate throughput<br>
+        Parking fill % · Post-match dispersal countdown<br>
+        Correlated temples list: "Ambaji receives in 22 min"<br>
+        No aarti. No darshan queue. No corridor width.
+      </div>
+    </div>
+    <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:6px;padding:8px 10px;margin-bottom:8px">
+      <div style="font-size:10px;font-weight:500;color:var(--color-text-secondary)" style="color:#a78bfa">When PROCESSION selected</div>
+      <div style="font-size:11px;color:var(--color-text-secondary);margin-top:4px;line-height:1.6">
+        Route map with live progress marker · Next junction ETA<br>
+        Route segment density heatmap · March velocity<br>
+        Correlated temples: "Dwarka gate blocked — 80%"<br>
+        Duration remaining countdown
+      </div>
+    </div>
+    <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:6px;padding:8px 10px">
+      <div style="font-size:10px;font-weight:500;color:var(--color-text-warning)">When STRIKE / DISRUPTION selected</div>
+      <div style="font-size:11px;color:var(--color-text-secondary);margin-top:4px;line-height:1.6">
+        Blocked route map · Alternate route capacity<br>
+        Affected zone radius · ETA clearance (if known)<br>
+        Diversion effect: "NH947 blocked → 3× normal toll at Khedbrahma"<br>
+        AI triage: what crowd compression to expect and where
+      </div>
+    </div>
+  </div>
+</div>

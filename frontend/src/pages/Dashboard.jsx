@@ -7,8 +7,9 @@ import SurgeClassifier from '../components/SurgeClassifier';
 import AlertBanner from '../components/AlertBanner';
 import AgencyPanel from '../components/AgencyPanel';
 import FlowChart from '../components/FlowChart';
-import CorridorCard from '../components/CorridorCard';
 import CorridorMap from '../components/CorridorMap';
+import TempleCenterPanel from '../components/panels/TempleCenterPanel';
+import StadiumCenterPanel from '../components/panels/StadiumCenterPanel';
 // Scenario extension components
 import AartiCountdown from '../components/AartiCountdown';
 import FlowDirectionIndicator from '../components/FlowDirectionIndicator';
@@ -16,8 +17,7 @@ import TollIndicatorStrip from '../components/TollIndicatorStrip';
 import { EventContextBadge, CalendarContextPill } from '../components/EventContextBadge';
 import BlackSwanPanel from '../components/BlackSwanPanel';
 import TransitPanel from '../components/TransitPanel';
-import ScenarioIntelligence from '../components/ScenarioIntelligence';
-import { AGENCIES } from '../utils/constants';
+import { AGENCIES, API_BASE_URL } from '../utils/constants';
 import { useTheme } from '../context/ThemeContext';
 
 const Dashboard = () => {
@@ -29,19 +29,49 @@ const Dashboard = () => {
     aarti_context, calendar_context, event_context, auspicious_context,
     procession_status, anomaly_data, counter_flow, cluster_data,
     toll_status, transit_status, zone_status,
+    venue_readings, correlation_signals,
     isConnected,
   } = wsData;
   
   // By default, select the first location or 'Ambaji'
   const [activeLocation, setActiveLocation] = useState('Ambaji');
   const [smsToast, setSmsToast] = useState(null);
+  const [locationRegistry, setLocationRegistry] = useState({ temples: [], events: [] });
   
+  useEffect(() => {
+    const normalizeRegistry = (data) => ({
+      temples: Array.isArray(data?.temples) ? data.temples : [],
+      events: Array.isArray(data?.events) ? data.events : [],
+    });
+    const fetchLocs = () => {
+      fetch(`${API_BASE_URL}/api/locations`)
+        .then(async (res) => {
+          if (!res.ok) throw new Error(`locations ${res.status}`);
+          return res.json();
+        })
+        .then((data) => setLocationRegistry(normalizeRegistry(data)))
+        .catch((err) => {
+          console.error('Could not load location registry', err);
+          setLocationRegistry({ temples: [], events: [] });
+        });
+    };
+    fetchLocs();
+    const intv = setInterval(fetchLocs, 3000); // refresh every 3 seconds for dynamically discovered events
+    return () => clearInterval(intv);
+  }, []);
+
   // Make sure activeLocation is valid once we get locations
   useEffect(() => {
-    if (locations.length > 0 && !locations.includes(activeLocation)) {
+    const validLocations = [
+      ...locations, 
+      ...locationRegistry.temples.map(t => t.id), 
+      ...locationRegistry.temples.map(t => t.name), 
+      ...locationRegistry.events.map(e => e.id)
+    ];
+    if (locations.length > 0 && !validLocations.includes(activeLocation)) {
       setActiveLocation(locations[0]);
     }
-  }, [locations, activeLocation]);
+  }, [locations, activeLocation, locationRegistry]);
 
   // Find active alert for current location
   const activeAlert = alerts?.find(a => a.status === 'active' && a.location === activeLocation) || null;
@@ -97,6 +127,20 @@ const Dashboard = () => {
   // Filter toll status for active corridor
   const corridorTolls = (toll_status || []).filter(t => t.target_corridor === activeLocation);
 
+  // Find venue type from registry
+  const locDef = [...(locationRegistry.temples || []), ...(locationRegistry.events || [])].find(
+    (l) => l.name === activeLocation || l.id === activeLocation
+  );
+  const venueType = locDef?.venue_type || 'temple';
+
+  // Split locations into permanent temples vs dynamic events for the sidebar
+  const templeLocations = locations.filter((locName) => {
+    const lDef = [...(locationRegistry.temples || [])].find((l) => l.name === locName || l.id === locName);
+    return lDef || !(locationRegistry.events || []).find((e) => e.name === locName || e.id === locName);
+  });
+
+  const eventLocations = locationRegistry.events || [];
+
   return (
     <div className={`p-6 h-full flex flex-col transition-colors duration-300 ${isDarkMode ? 'bg-slate-900' : 'bg-slate-50'}`}>
       {smsToast && (
@@ -135,87 +179,142 @@ const Dashboard = () => {
         
         {/* Left Column: List of Corridors + Context Badges */}
         <div className="col-span-12 xl:col-span-3 flex flex-col space-y-4 overflow-y-auto pr-2 pb-4">
-          <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2">Monitored Corridors</h2>
+          <h2 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2 pt-2">Monitored Corridors</h2>
           
-          <ScenarioIntelligence 
-            aartiContext={locAarti}
-            calendarContext={locCalendar}
-            eventContext={locEvent}
-            auspiciousContext={locAuspicious}
-            processionStatus={locProcession}
-            anomalyData={locAnomaly}
-            counterFlowStatus={locCounterFlow}
-            clusterData={locCluster}
-            tollStatus={corridorTolls}
-            transitStatus={transit_status}
-            zoneStatus={zone_status}
-            entryFlow={entryFlow}
-            exitFlow={exitFlow}
-            location={activeLocation}
-          />
-          
-          {/* Corridor Cards */}
-          {locations.length > 0 ? locations.map(loc => (
-            <CorridorCard 
-              key={loc}
-              location={loc}
-              pressureIndex={pressure[loc]}
-              riskLevel={predictions[loc]?.risk_level}
-              entryFlow={flow_rates[loc]?.entry}
-              exitFlow={flow_rates[loc]?.exit}
-              isActive={activeLocation === loc}
-              onClick={() => setActiveLocation(loc)}
-              aartiContext={aarti_context?.[loc]}
-              clusterData={cluster_data?.[loc]}
-              processionStatus={procession_status?.[loc]}
-            />
-          )) : (
-            <div className="p-4 bg-slate-800 rounded-lg text-sm text-slate-500 text-center">No locations mapped yet.</div>
+          {/* Monitored Temples Section */}
+          <h3 className="text-[10px] font-black text-slate-500/70 uppercase tracking-widest mb-3 px-1 mt-2">Monitored Temples</h3>
+          {templeLocations.length > 0 ? templeLocations.map(loc => {
+            const isAct = activeLocation === loc;
+            const eventPressure = pressure[loc] || 0;
+            const rLevel = predictions[loc]?.risk_level || 'Low';
+            
+            let badgeText = "SAFE";
+            let bgStr = "bg-green-500/10"; let textStr = "text-green-400"; let borderStr = "border-green-500/20"; let ringStr = "ring-green-500/30"; let shadowStr = "shadow-[0_0_20px_rgba(34,197,94,0.15)]"; let gradStr = "from-green-500/10";
+            
+            if (rLevel === "Moderate") { 
+               badgeText = "WATCH"; 
+               bgStr = "bg-amber-500/10"; textStr = "text-amber-400"; borderStr = "border-amber-500/20"; ringStr = "ring-amber-500/30"; shadowStr = "shadow-[0_0_20px_rgba(245,158,11,0.15)]"; gradStr = "from-amber-500/10";
+            } else if (rLevel === "High" || rLevel === "Critical") { 
+               badgeText = "CRITICAL"; 
+               bgStr = "bg-red-500/10"; textStr = "text-red-400"; borderStr = "border-red-500/20"; ringStr = "ring-red-500/30"; shadowStr = "shadow-[0_0_20px_rgba(239,68,68,0.20)]"; gradStr = "from-red-500/10";
+            }
+            
+            const numSignals = activeAlert && activeAlert.location === loc ? 1 : 0;
+
+            return (
+               <div 
+                 key={loc}
+                 onClick={() => setActiveLocation(loc)}
+                 className={`relative overflow-hidden cursor-pointer rounded-xl p-3.5 mb-2.5 transition-all duration-300 border backdrop-blur-sm ${isAct ? `bg-slate-800/80 border-slate-700 ring-1 ring-inset ${ringStr} ${shadowStr}` : 'bg-slate-900/40 border-slate-800/50 hover:bg-slate-800/60 hover:border-slate-700/60'}`}
+               >
+                 {isAct && <div className={`absolute -top-10 -right-10 w-32 h-32 bg-gradient-radial ${gradStr} to-transparent rounded-full blur-2xl pointer-events-none opacity-60`}></div>}
+                 
+                 <div className="relative z-10 flex justify-between items-center">
+                   <div className="flex-1 min-w-0 pr-3">
+                     <div className="text-slate-100 font-bold text-[14px] tracking-wide">{loc}</div>
+                     <div className="flex gap-2 items-center mt-1.5">
+                       <span className={`px-1.5 py-0.5 rounded ${bgStr} ${textStr} ${borderStr} border text-[8.5px] font-black tracking-widest leading-none uppercase`}>{badgeText}</span>
+                       <span className="text-[10px] font-medium text-slate-500 truncate mt-px">
+                         {pressure[loc] ? `Risk: ${rLevel}` : "Awaiting sync"}
+                       </span>
+                     </div>
+                   </div>
+                   
+                   <div className="flex flex-col items-end justify-center pl-2">
+                     {pressure[loc] ? (
+                       <span className={`text-[19px] font-black ${textStr} tabular-nums tracking-tighter leading-none`}>{Math.round(eventPressure)}</span>
+                     ) : (
+                       <div className="w-4 h-4 border-2 border-slate-700 border-t-slate-400 rounded-full animate-spin"></div>
+                     )}
+                     {numSignals > 0 && <div className="text-[9px] text-red-400 font-bold tracking-wider mt-1 px-1 bg-red-500/10 rounded">{numSignals} SIGNAL</div>}
+                   </div>
+                 </div>
+               </div>
+            );
+          }) : (
+            <div className="p-4 bg-slate-900/40 border border-slate-800/50 rounded-xl text-xs text-slate-500 text-center uppercase tracking-widest font-medium">No temples mapped</div>
+          )}
+
+          {/* Active Events Section */}
+          {eventLocations.length > 0 && (
+            <>
+              <div className="h-px w-full bg-gradient-to-r from-transparent via-slate-800 to-transparent my-4"></div>
+              <h3 className="text-[10px] font-black text-slate-500/70 uppercase tracking-widest mb-3 px-1">Dynamic Events ({eventLocations.length})</h3>
+              
+              <div className="space-y-2.5">
+              {eventLocations.map(ev => {
+                const locId = ev.id;
+                const isAct = activeLocation === locId;
+                const eventPressure = pressure[locId];
+                const riskLevel = predictions[locId]?.risk_level || 'Low';
+
+                let badgeText = "EVENT";
+                let bgStr = "bg-blue-500/10"; let textStr = "text-blue-400"; let borderStr = "border-blue-500/20"; let ringStr = "ring-blue-500/30"; let shadowStr = "shadow-[0_0_20px_rgba(59,130,246,0.15)]"; let gradStr = "from-blue-500/10";
+                
+                if (ev.venue_type === 'stadium') { }
+                else if (ev.venue_type === 'procession') { badgeText = "PROCESSION"; bgStr = "bg-purple-500/10"; textStr = "text-purple-400"; borderStr = "border-purple-500/20"; ringStr = "ring-purple-500/30"; shadowStr = "shadow-[0_0_20px_rgba(168,85,247,0.15)]"; gradStr = "from-purple-500/10"; }
+                else if (ev.venue_type === 'social') { badgeText = "SOCIAL"; bgStr = "bg-amber-500/10"; textStr = "text-amber-400"; borderStr = "border-amber-500/20"; ringStr = "ring-amber-500/30"; shadowStr = "shadow-[0_0_20px_rgba(245,158,11,0.15)]"; gradStr = "from-amber-500/10"; }
+                else if (ev.venue_type === 'strike') { badgeText = "STRIKE"; bgStr = "bg-orange-500/10"; textStr = "text-orange-400"; borderStr = "border-orange-500/20"; ringStr = "ring-orange-500/30"; shadowStr = "shadow-[0_0_20px_rgba(249,115,22,0.15)]"; gradStr = "from-orange-500/10"; }
+                else if (ev.venue_type === 'mela') { badgeText = "MELA"; bgStr = "bg-emerald-500/10"; textStr = "text-emerald-400"; borderStr = "border-emerald-500/20"; ringStr = "ring-emerald-500/30"; shadowStr = "shadow-[0_0_20px_rgba(16,185,129,0.15)]"; gradStr = "from-emerald-500/10"; }
+                else if (ev.venue_type === 'rally') { badgeText = "RALLY"; bgStr = "bg-rose-500/10"; textStr = "text-rose-400"; borderStr = "border-rose-500/20"; ringStr = "ring-rose-500/30"; shadowStr = "shadow-[0_0_20px_rgba(244,63,94,0.15)]"; gradStr = "from-rose-500/10"; }
+
+                return (
+                  <div 
+                    key={locId} 
+                    onClick={() => setActiveLocation(locId)}
+                    className={`relative overflow-hidden cursor-pointer rounded-xl p-3 transition-all duration-300 border backdrop-blur-sm ${isAct ? `bg-slate-800/80 border-slate-700 ring-1 ring-inset ${ringStr} ${shadowStr}` : 'bg-slate-900/40 border-slate-800/50 hover:bg-slate-800/60 hover:border-slate-700/60'}`}
+                  >
+                    {isAct && <div className={`absolute -top-10 -right-10 w-32 h-32 bg-gradient-radial ${gradStr} to-transparent rounded-full blur-2xl pointer-events-none opacity-60`}></div>}
+                    
+                    <div className="relative z-10 flex justify-between items-center">
+                      <div className="flex-1 min-w-0 pr-3">
+                        <div className="text-slate-100 font-bold text-[13px] tracking-wide truncate">{ev.name}</div>
+                        <div className="flex gap-2 items-center mt-1.5">
+                          <span className={`px-1.5 py-0.5 rounded ${bgStr} ${textStr} border ${borderStr} text-[8.5px] font-black tracking-widest uppercase leading-none`}>{badgeText}</span>
+                          <span className="text-[10px] font-medium text-slate-500 truncate mt-px">
+                            {pressure[locId] ? `Risk: ${riskLevel}` : "Awaiting sync"}
+                          </span>
+                        </div>
+                      </div>
+                      
+                      <div className="flex flex-col items-end justify-center pl-2">
+                          {pressure[locId] ? (
+                             <div className={`text-[17px] font-black ${textStr} tabular-nums tracking-tighter leading-none`}>{Math.round(eventPressure)}</div>
+                          ) : (
+                             <div className="w-4 h-4 border-2 border-slate-700 border-t-slate-400 rounded-full animate-spin"></div>
+                          )}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+              </div>
+            </>
           )}
         </div>
 
         {/* Middle Column: Gauges and Detail */}
-        <div className="col-span-12 lg:col-span-6 xl:col-span-5 flex flex-col space-y-6">
-          <div className="bg-slate-950 border border-slate-800 rounded-xl p-6 shadow-xl flex flex-col items-center">
-            <h2 className="text-xl font-bold mb-6 text-white text-center w-full border-b border-slate-800 pb-4">
-              {activeLocation} <span className="text-slate-500 font-medium">Pressure Index</span>
-            </h2>
-            
-            <div className="flex flex-col md:flex-row items-center justify-around w-full gap-8">
-              <PressureGauge value={currentPressure} size="lg" />
-              <div className="w-full md:w-auto">
-                <CrushCountdown 
-                  minutes={currentPrediction.crush_window_min} 
-                  isSafe={currentPrediction.risk_level === 'Low' || currentPressure < 40}
-                />
-              </div>
-            </div>
-            
-            <div className="w-full mt-8">
-              <SurgeClassifier classification={currentClassification} />
-            </div>
-          </div>
-
-          {/* Flow Direction + Counter-flow Indicator */}
-          <FlowDirectionIndicator 
-            entryFlow={entryFlow} 
-            exitFlow={exitFlow} 
-            counterFlowStatus={locCounterFlow} 
+        {venueType === 'temple' ? (
+          <TempleCenterPanel 
+            activeLocation={activeLocation}
+            currentPressure={currentPressure}
+            currentPrediction={currentPrediction}
+            currentClassification={currentClassification}
+            entryFlow={entryFlow}
+            exitFlow={exitFlow}
+            locCounterFlow={locCounterFlow}
+            locAnomaly={locAnomaly}
+            currentFlowHistory={currentFlowHistory}
           />
-
-          {/* Black Swan / Anomaly Panel */}
-          <BlackSwanPanel anomalyData={locAnomaly} location={activeLocation} />
-
-          <div className="bg-slate-950 border border-slate-800 rounded-xl p-6 shadow-xl flex-1 flex flex-col min-h-[300px]">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wider">Live Flow Dynamics</h2>
-              <div className="text-xs text-slate-500">Live 50 updates</div>
-            </div>
-            <div className="flex-1 min-h-0">
-              <FlowChart data={currentFlowHistory} />
-            </div>
-          </div>
-        </div>
+        ) : (
+          <StadiumCenterPanel 
+            activeLocation={locDef?.name || activeLocation}
+            venueType={venueType}
+            currentPressure={currentPressure}
+            readings={venue_readings?.[activeLocation] || {}}
+            correlationSignal={correlation_signals?.[activeLocation]}
+          />
+        )}
 
         {/* Right Column: Actions and Map */}
         <div className="col-span-12 lg:col-span-6 xl:col-span-4 flex flex-col space-y-6">

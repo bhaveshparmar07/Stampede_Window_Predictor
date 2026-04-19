@@ -65,6 +65,14 @@ from services.transit_predictor import (
 )
 from services.sms_notifier import notify_authority_sms_for_alert, send_sms
 
+# Phase M Multi-Entity Services
+from services.location_registry import (
+    LOCATION_REGISTRY, get_temples, get_active_events,
+    get_correlated_events, register_dynamic_event
+)
+from services.form_factors import get_form_factor, compute_generic_pressure
+from services.correlation_engine import map_event_to_correlation
+
 # ─── App Setup ────────────────────────────────────────────────────────────────
 
 app = FastAPI(
@@ -96,25 +104,8 @@ escalation_task: Optional[asyncio.Task] = None
 # ML model (loaded once at startup)
 ml_models = None
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "saved_model.pkl")
-FEATURE_COLUMNS = [
-    "entry_flow_rate_pax_per_min",
-    "exit_flow_rate_pax_per_min",
-    "transport_arrival_burst",
-    "vehicle_count",
-    "queue_density_pax_per_m2",
-    "corridor_width_m",
-    "festival_peak",
-    "weather_encoded",
-    "aarti_active",
-    "minutes_to_aarti",
-    "calendar_mult",
-    "event_mult",
-    "flow_conflict_penalty",
-    "density_variance",
-    "cluster_flag",
-    "anomaly_flag",
-]
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "dataset", "pkl", "master_crush_window_rf_model.pkl")
+FEATURE_COLUMNS = []
 
 
 # ─── Startup / Shutdown ──────────────────────────────────────────────────────
@@ -122,19 +113,23 @@ FEATURE_COLUMNS = [
 @app.on_event("startup")
 async def startup():
     """Initialize DB and load ML models."""
-    global ml_models, escalation_task
+    global ml_models, escalation_task, FEATURE_COLUMNS
 
     # Init database
     init_db()
 
-    # Load ML model (T-015b)
+    # Load ML model
     if os.path.exists(MODEL_PATH):
-        ml_models = joblib.load(MODEL_PATH)
-        print(f"[ML] Loaded models from {MODEL_PATH}")
-        print(f"[ML] Features: {ml_models['feature_columns']}")
+        try:
+            ml_models = joblib.load(MODEL_PATH)
+            FEATURE_COLUMNS = list(ml_models.feature_names_in_)
+            print(f"[ML] Loaded models from {MODEL_PATH}")
+            print(f"[ML] Features ({len(FEATURE_COLUMNS)}): {FEATURE_COLUMNS[:5]}...")
+        except BaseException as e:
+            print(f"[ML] ERROR loading model: {e}")
     else:
         print(f"[ML] WARNING: Model not found at {MODEL_PATH}")
-        print(f"[ML] Run 'python models/train_model.py' first")
+        print(f"[ML] Check path!")
 
     escalation_task = asyncio.create_task(sms_escalation_loop())
 
@@ -236,6 +231,17 @@ class SmsTestPayload(BaseModel):
     phone: str = "7698331412"
     message: str = "TEST: Stampede Predictor SMS gateway check"
 
+class EventRegistrationPayload(BaseModel):
+    name: str
+    venue_type: str
+    lat: float
+    lng: float
+    radius_km: float = 1.0
+    form_factors: List[str] = []
+
+class DynamicEventIngestPayload(BaseModel):
+    timestamp: Optional[str] = None
+    readings: dict
 
 # ─── Helper: WebSocket Broadcast ─────────────────────────────────────────────
 
@@ -279,6 +285,8 @@ async def broadcast_state():
     anomaly_data = {}
     counter_flow_data = {}
     cluster_data = {}
+    venue_readings_data = {}
+    correlation_signals_data = {}
 
     for loc, state in current_state.items():
         pressure_data[loc] = state.get("pressure_index", 0)
@@ -301,6 +309,8 @@ async def broadcast_state():
         anomaly_data[loc] = state.get("anomaly_data", {})
         counter_flow_data[loc] = state.get("counter_flow_status", None)
         cluster_data[loc] = state.get("cluster_data", {})
+        venue_readings_data[loc] = state.get("readings") or {}
+        correlation_signals_data[loc] = state.get("correlation_signal")
 
     message = {
         "type": "state_update",
@@ -325,6 +335,8 @@ async def broadcast_state():
             "toll_status": get_all_toll_status(),
             "transit_status": get_all_transit_status(),
             "zone_status": dict(zone_status),
+            "venue_readings": venue_readings_data,
+            "correlation_signals": correlation_signals_data,
         }),
     }
 
@@ -412,37 +424,101 @@ async def sms_escalation_loop():
 
 def run_ml_prediction(row_dict: dict) -> dict:
     """Run ML models on a data row. Returns predicted risk_level and crush_window_min."""
-    if ml_models is None:
+    if ml_models is None or not FEATURE_COLUMNS:
         return {"risk_level": "Low", "crush_window_min": 15.0}
 
-    # Encode weather
-    weather = row_dict.get("weather", "Clear")
-    try:
-        weather_encoded = int(ml_models["weather_encoder"].transform([weather])[0])
-    except ValueError:
-        weather_encoded = 0  # unknown weather → default encoding
-
-    # Build feature vector
+    # Build feature vector dynamically matching the model's exact signature
     features = {}
     for col in FEATURE_COLUMNS:
-        if col == "weather_encoded":
-            features[col] = weather_encoded
+        if col.startswith("Event_Type_"):
+            target_event = col.replace("Event_Type_", "")
+            current_event = str(row_dict.get("Event_Type", "")).strip()
+            features[col] = 1.0 if current_event == target_event else 0.0
+        elif col.startswith("Location_"):
+            target_loc = col.replace("Location_", "")
+            current_loc = str(row_dict.get("Location", "")).strip()
+            features[col] = 1.0 if current_loc == target_loc else 0.0
+        elif col.startswith("Weather_"):
+            target_w = col.replace("Weather_", "")
+            current_w = str(row_dict.get("Weather", "")).strip().lower()
+            features[col] = 1.0 if current_w == target_w else 0.0
+        elif col.startswith("Risk Level_"):
+            target_r = col.replace("Risk Level_", "")
+            current_r = str(row_dict.get("Risk Level", "low")).strip().lower()
+            features[col] = 1.0 if current_r == target_r else 0.0
         else:
-            features[col] = float(row_dict.get(col, 0))
+            try:
+                features[col] = float(row_dict.get(col, 0))
+            except (ValueError, TypeError):
+                features[col] = 0.0
 
     feature_df = pd.DataFrame([features])
 
-    # Predict
-    risk_level = ml_models["classifier"].predict(feature_df)[0]
-    crush_window = float(ml_models["regressor"].predict(feature_df)[0])
+    # Predict directly using the RF estimator
+    try:
+        crush_window = float(ml_models.predict(feature_df)[0])
+    except Exception as e:
+        print(f"[ML] Prediction Error: {e}")
+        crush_window = 15.0
+
+    risk_level = str(row_dict.get("Risk Level", "Low")).title()
 
     return {
-        "risk_level": str(risk_level),
+        "risk_level": risk_level,
         "crush_window_min": round(crush_window, 2),
     }
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────
+
+@app.get("/api/locations")
+async def get_locations():
+    """Return all active locations (temples + events)."""
+    return {
+        "temples": [loc.__dict__ for loc in get_temples()],
+        "events": [loc.__dict__ for loc in get_active_events()]
+    }
+
+@app.post("/api/events/register")
+async def register_event(payload: EventRegistrationPayload):
+    """Admin endpoint to spin up temporary tracking for a new event."""
+    loc = register_dynamic_event(
+        name=payload.name,
+        venue_type=payload.venue_type,
+        lat=payload.lat,
+        lng=payload.lng,
+        all_temples=[t.name for t in get_temples()],
+        radius_km=payload.radius_km,
+        form_factors=payload.form_factors,
+    )
+    return {"status": "ok", "location": loc.__dict__}
+
+@app.post("/api/ingest/event/{event_id}")
+async def ingest_dynamic_event(event_id: str, payload: DynamicEventIngestPayload):
+    """Ingest readings for a non-temple entity (stadium, rally, etc.)."""
+    loc = next((l for l in LOCATION_REGISTRY if l.id == event_id), None)
+    if not loc:
+        return {"error": "Event not found"}, 404
+        
+    pressure = compute_generic_pressure(loc.venue_type, payload.readings)
+    
+    signal = map_event_to_correlation(loc.venue_type, pressure, payload.readings)
+    ml_result = run_ml_prediction(payload.readings)
+    risk_lvl = ml_result.get("risk_level", "Low")
+    
+    current_state[event_id] = {
+        "location": loc.name,
+        "venue_type": loc.venue_type,
+        "timestamp": payload.timestamp or datetime.now().isoformat(),
+        "pressure_index": round(pressure, 2),
+        "readings": payload.readings,
+        "correlation_signal": signal,
+        "crush_window_min": ml_result.get("crush_window_min", 15.0),
+        "risk_level": risk_lvl,
+        "classification": "MONITORING" if risk_lvl in ["Low", "Moderate"] else "CRUSH BUILDUP"
+    }
+    await broadcast_state()
+    return {"status": "ok", "pressure": round(pressure, 2), "correlation": signal}
 
 @app.get("/api/health")
 async def health():
@@ -519,9 +595,19 @@ async def ingest(payload: IngestPayload):
         if zdata.get("location") == location and zdata.get("zone_type") == "BUFFER":
             buffer_penalty = max(buffer_penalty, compute_combined_zone_pressure(0, zdata.get("utilization_pct", 0)))
 
+    # Phase M: Regional correlated events multiplier
+    regional_events = get_correlated_events(location)
+    regional_event_mult = 1.0
+    for rev in regional_events:
+        st = current_state.get(rev.id)
+        if st and "correlation_signal" in st:
+            regional_event_mult *= st["correlation_signal"]["compound_mult"]
+
+    effective_event_mult = event_ctx["multiplier"] * regional_event_mult
+
     # Build context dict for pressure calculator
     pressure_context = {
-        "event_mult": event_ctx["multiplier"],
+        "event_mult": effective_event_mult,
         "calendar_mult": calendar_ctx["multiplier"],
         "aarti_mult": aarti_ctx["multiplier"],
         "auspicious_mult": auspicious_ctx["multiplier"],

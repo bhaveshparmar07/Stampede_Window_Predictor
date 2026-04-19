@@ -99,3 +99,18 @@ CREATE TABLE IF NOT EXISTS scheduled_events (
     distance_km         REAL,
     status              TEXT DEFAULT 'scheduled'
 );
+
+-- AI triage log (S6)
+CREATE TABLE IF NOT EXISTS ai_triage_log (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp        TEXT NOT NULL,
+    location         TEXT NOT NULL,
+    pressure_index   REAL,
+    anomaly_z_score  REAL,
+    anomaly_severity TEXT,
+    operator_context TEXT,
+    triage_text      TEXT,
+    alert_id         INTEGER,
+    FOREIGN KEY (alert_id) REFERENCES alerts(id)
+);
+

@@ -25,6 +25,8 @@ export const WebSocketProvider = ({ children }) => {
     toll_status: [],
     transit_status: {},
     zone_status: {},
+    venue_readings: {},
+    correlation_signals: {},
   });
   
   const [isConnected, setIsConnected] = useState(false);

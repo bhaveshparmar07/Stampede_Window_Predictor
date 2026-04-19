@@ -70,6 +70,36 @@ body {
   50% { opacity: 0.5; }
 }
 
-.animate-pulse-fast {
-  animation: pulse-fast 1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+/* HTML Mockup `.mock-loc` Sidebar Styles */
+.mock-section { font-size:10px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; padding-left:4px; margin-top:16px; }
+.mock-section:first-child { margin-top:0; }
+.mock-loc {
+  border-radius:6px;
+  padding:10px 12px;
+  margin-bottom:6px;
+  background: var(--bg-card);
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  cursor:pointer;
+  border: 1px solid var(--border-ui);
+  border-left: 3px solid transparent; 
+  transition: all 0.2s ease;
 }
+.mock-loc:hover { filter: brightness(1.2); }
+.mock-loc.sel { background: var(--bg-card); border-left-color: currentColor; filter: brightness(1.3); }
+.mock-loc-name { font-size:14px; font-weight:600; color:var(--text-primary); margin-bottom: 2px; }
+.mock-loc-sub { font-size:11px; color:var(--text-secondary); max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display:block; }
+
+.mock-badge { font-size:9px; padding:2px 6px; border-radius:4px; font-weight:800; letter-spacing:0.5px; }
+.b-watch { background:rgba(251,191,36,.1); color:#fbbf24; border: 0.5px solid rgba(251,191,36,.2); }
+.b-crit { background:rgba(248,113,113,.1); color:#f87171; border: 0.5px solid rgba(248,113,113,.2); }
+.b-safe { background:rgba(74,222,128,.1); color:#4ade80; border: 0.5px solid rgba(74,222,128,.2); }
+.b-live { background:rgba(96,165,250,.1); color:#60a5fa; border: 0.5px solid rgba(96,165,250,.2); }
+.b-proc { background:rgba(167,139,250,.1); color:#a78bfa; border: 0.5px solid rgba(167,139,250,.2); }
+.b-social { background:rgba(251,191,36,.1); color:#fbbf24; border: 0.5px solid rgba(251,191,36,.2); }
+.b-strike { background:rgba(249,115,22,.1); color:#f97316; border: 0.5px solid rgba(249,115,22,.2); }
+.b-mela { background:rgba(52,211,153,.1); color:#34d399; border: 0.5px solid rgba(52,211,153,.2); }
+.b-rally { background:rgba(244,63,94,.1); color:#f43f5e; border: 0.5px solid rgba(244,63,94,.2); }
+
+.signal-badge { font-size:10px; font-weight: 500; color:#ef4444; }
