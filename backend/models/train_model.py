@@ -14,8 +14,11 @@ Output:
   - Console: accuracy, MAE, classification report, prediction window validation
 """
 
+from __future__ import annotations
+
 import os
 import sys
+import argparse
 import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
@@ -27,8 +30,8 @@ import joblib
 # Paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
-DATASET_PATH = os.path.join(PROJECT_ROOT, "dataset", "TS-PS11.csv")
-CLEANED_PATH = os.path.join(PROJECT_ROOT, "data", "cleaned_dataset.csv")
+DATASET_PATH = os.path.join(PROJECT_ROOT, "data", "corridor_readings_augmented.csv")
+CLEANED_PATH = os.path.join(PROJECT_ROOT, "data", "cleaned_dataset_augmented.csv")
 MODEL_PATH = os.path.join(SCRIPT_DIR, "saved_model.pkl")
 
 # Feature columns (from architecture.md)
@@ -41,18 +44,28 @@ FEATURE_COLUMNS = [
     "corridor_width_m",
     "festival_peak",
     "weather_encoded",
+    "aarti_active",
+    "minutes_to_aarti",
+    "calendar_mult",
+    "event_mult",
+    "flow_conflict_penalty",
+    "density_variance",
+    "cluster_flag",
+    "anomaly_flag",
 ]
 
 CLASSIFIER_TARGET = "risk_level"
 REGRESSOR_TARGET = "predicted_crush_window"
 
 
-def load_and_clean_data():
-    """Load the Excel dataset, clean it, and save as CSV."""
-    print(f"[DATA] Loading dataset from {DATASET_PATH}")
+def load_and_clean_data(dataset_path: str | None = None, cleaned_path: str | None = None):
+    """Load augmented corridor CSV, clean it, and save cleaned copy."""
+    src = dataset_path or DATASET_PATH
+    dst = cleaned_path or CLEANED_PATH
+    print(f"[DATA] Loading dataset from {src}")
 
-    # The file is actually Excel despite .csv extension
-    df = pd.read_excel(DATASET_PATH)
+    # The file is CSV
+    df = pd.read_csv(src)
     print(f"[DATA] Loaded {len(df)} rows, {len(df.columns)} columns")
     print(f"[DATA] Columns: {list(df.columns)}")
 
@@ -76,9 +89,9 @@ def load_and_clean_data():
         print("[DATA] No nulls found [OK]")
 
     # Save cleaned dataset
-    os.makedirs(os.path.dirname(CLEANED_PATH), exist_ok=True)
-    df.to_csv(CLEANED_PATH, index=False)
-    print(f"[DATA] Saved cleaned dataset to {CLEANED_PATH}")
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    df.to_csv(dst, index=False)
+    print(f"[DATA] Saved cleaned dataset to {dst}")
 
     return df, weather_encoder
 
@@ -206,8 +219,26 @@ if __name__ == "__main__":
     print("Stampede Window Predictor -- Model Training")
     print("=" * 60)
 
+    ap = argparse.ArgumentParser(description="Train RF classifier + regressor on augmented corridor CSV")
+    ap.add_argument(
+        "--input",
+        type=str,
+        default=None,
+        help="Path to augmented CSV (default: ../data/corridor_readings_augmented.csv from backend/)",
+    )
+    ap.add_argument(
+        "--output-cleaned",
+        type=str,
+        default=None,
+        help="Path to write cleaned CSV (default: ../data/cleaned_dataset_augmented.csv)",
+    )
+    cli = ap.parse_args()
+
+    in_path = cli.input or DATASET_PATH
+    out_path = cli.output_cleaned or CLEANED_PATH
+
     # Step 1: Load and clean data
-    df, weather_encoder = load_and_clean_data()
+    df, weather_encoder = load_and_clean_data(dataset_path=in_path, cleaned_path=out_path)
 
     # Step 2: Validate columns (T-006b)
     validate_columns(df)
@@ -219,4 +250,4 @@ if __name__ == "__main__":
     save_models(classifier, regressor, weather_encoder)
 
     print("\n[DONE] Training complete. Run the backend with:")
-    print("  cd backend && uvicorn main:app --reload --port 8000")
+    print("  cd backend && uvicorn main:app --reload --port 8080")

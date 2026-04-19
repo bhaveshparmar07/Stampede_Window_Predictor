@@ -4,3 +4,7 @@ progress.md
 tasks.md
 /dataset
 /data
+context.md
+refined_updates.md
+ui.md
+data_gen.py

@@ -1,5 +1,31 @@
 @import "tailwindcss";
 
+@layer base {
+  :root {
+    --bg-main: #020617; /* slate-950 */
+    --bg-page: #0f172a; /* slate-900 */
+    --bg-card: #1e293b66; /* slate-800/40 */
+    --bg-panel: #020617; /* slate-950 */
+    --border-ui: #1e293b; /* slate-800 */
+    --text-primary: #f8fafc; /* slate-50 */
+    --text-secondary: #94a3b8; /* slate-400 */
+    --text-muted: #64748b; /* slate-500 */
+    --accent-glow: rgba(59, 130, 246, 0.1);
+  }
+}
+
+.light {
+  --bg-main: #f8fafc; /* slate-50 */
+  --bg-page: #f1f5f9; /* slate-100 */
+  --bg-card: #ffffff; /* white */
+  --bg-panel: #ffffff;
+  --border-ui: #e2e8f0; /* slate-200 */
+  --text-primary: #0f172a; /* slate-900 */
+  --text-secondary: #475569; /* slate-600 */
+  --text-muted: #94a3b8; /* slate-400 */
+  --accent-glow: rgba(59, 130, 246, 0.05);
+}
+
 @layer theme {
   :root {
     --color-green-500: #22c55e;
@@ -15,8 +41,27 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #f8fafc; /* slate-900 */
-  color: #f8fafc; /* slate-50 */
+  background-color: var(--bg-page);
+  color: var(--text-primary);
+}
+
+/* Custom scrollbar for premium feel */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-ui);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
 }
 
 /* Animations */

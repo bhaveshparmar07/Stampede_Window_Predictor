@@ -1,5 +1,6 @@
 // API and WebSocket URLs
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+// Default matches README + stream_data.py (uvicorn --port 8080)
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
 export const WS_URL = API_BASE_URL.replace('http://', 'ws://').replace('https://', 'wss://') + '/ws/dashboard';
 export const WS_RECONNECT_MS = 3000;
 

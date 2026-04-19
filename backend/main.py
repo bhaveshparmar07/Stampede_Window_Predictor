@@ -1,20 +1,27 @@
 """
-Stampede Window Predictor — FastAPI Backend
+Stampede Window Predictor — FastAPI Backend (v2 — Scenario Extensions S1-S11)
 
 Main application with:
-  - POST /api/ingest: receive data rows from simulation
-  - WS /ws/dashboard: WebSocket push to all connected clients
+  - POST /api/ingest: receive data rows from simulation (enriched pipeline)
+  - WS /ws/dashboard: WebSocket push to all connected clients (enriched payload)
   - POST /api/acknowledge: agency acknowledgement
   - GET /api/events: filterable event log
   - POST /api/replay/start: load replay scenario
   - GET /api/replay/frame: get next replay frame
   - GET /api/health: health check
+  - POST /api/ingest/transit: transit convoy data (S3)
+  - POST /api/ingest/toll: toll booth data (S4)
+  - POST /api/ingest/zone: buffer zone data (S5)
+  - POST /api/anomaly/context: operator context for AI triage (S6)
+  - POST /api/procession/start: start manual procession (S10)
+  - POST /api/procession/stop: stop manual procession (S10)
 """
 
 import os
 import json
 import math
-from datetime import datetime
+import asyncio
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 import joblib
@@ -24,17 +31,46 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from database import get_connection, init_db, insert_pressure_reading, insert_alert, insert_acknowledgement, insert_event, get_events, get_active_alerts, get_alert_acknowledgements
-from services.pressure_calculator import compute_pressure_index
-from services.crush_classifier import classify_crush_or_surge, get_history, pressure_history
-from services.alert_manager import should_trigger_alert, get_agency_actions, AGENCY_ACTIONS, ALERT_THRESHOLD
+from database import (
+    get_connection, init_db, insert_pressure_reading, insert_alert,
+    insert_acknowledgement, insert_event, get_events, get_active_alerts,
+    get_alert_acknowledgements,
+)
+from services.pressure_calculator import compute_pressure_index, compute_combined_zone_pressure
+from services.crush_classifier import (
+    classify_crush_or_surge, get_history, pressure_history,
+    detect_counter_flow, detect_zone_cascade, detect_cluster_formation,
+)
+from services.alert_manager import (
+    should_trigger_alert, get_agency_actions, AGENCY_ACTIONS, ALERT_THRESHOLD,
+)
+
+# New scenario services
+from services.event_context import get_active_event_context
+from services.calendar_context import get_calendar_multiplier
+from services.aarti_context import get_aarti_context
+from services.lunar_calendar import get_auspicious_context
+from services.procession_monitor import (
+    get_procession_status, apply_corridor_obstruction,
+    start_manual_procession, stop_manual_procession,
+)
+from services.black_swan_detector import (
+    detect_anomaly, get_ai_triage_mock,
+    set_operator_context, get_operator_context,
+)
+from services.toll_analyzer import compute_toll_surge_ratio, get_all_toll_status, get_toll_status_for_corridor
+from services.transit_predictor import (
+    predict_choke_pressure_from_transit, update_transit_status,
+    get_transit_status, get_all_transit_status,
+)
+from services.sms_notifier import notify_authority_sms_for_alert, send_sms
 
 # ─── App Setup ────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="Stampede Window Predictor",
     description="Real-time crowd pressure intelligence for pilgrimage corridors",
-    version="1.0.0",
+    version="2.0.0",
 )
 
 # CORS — allow frontend dev server
@@ -54,6 +90,8 @@ connected_clients: List[WebSocket] = []   # WebSocket connections
 replay_frames: List[dict] = []            # loaded replay scenario
 replay_cursor: int = 0                    # current replay position
 flow_history: Dict[str, List[dict]] = {}  # location → last N flow readings
+zone_status: Dict[str, dict] = {}        # zone_id → latest zone reading
+escalation_task: Optional[asyncio.Task] = None
 
 # ML model (loaded once at startup)
 ml_models = None
@@ -68,6 +106,14 @@ FEATURE_COLUMNS = [
     "corridor_width_m",
     "festival_peak",
     "weather_encoded",
+    "aarti_active",
+    "minutes_to_aarti",
+    "calendar_mult",
+    "event_mult",
+    "flow_conflict_penalty",
+    "density_variance",
+    "cluster_flag",
+    "anomaly_flag",
 ]
 
 
@@ -76,7 +122,7 @@ FEATURE_COLUMNS = [
 @app.on_event("startup")
 async def startup():
     """Initialize DB and load ML models."""
-    global ml_models
+    global ml_models, escalation_task
 
     # Init database
     init_db()
@@ -89,6 +135,20 @@ async def startup():
     else:
         print(f"[ML] WARNING: Model not found at {MODEL_PATH}")
         print(f"[ML] Run 'python models/train_model.py' first")
+
+    escalation_task = asyncio.create_task(sms_escalation_loop())
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Stop background tasks cleanly."""
+    global escalation_task
+    if escalation_task and not escalation_task.done():
+        escalation_task.cancel()
+        try:
+            await escalation_task
+        except asyncio.CancelledError:
+            pass
 
 
 # ─── Pydantic Models ─────────────────────────────────────────────────────────
@@ -116,6 +176,65 @@ class AcknowledgePayload(BaseModel):
     alert_id: int
     agency: str  # 'police', 'temple', 'transport'
     action_taken: Optional[str] = None
+
+
+class TransitIngestPayload(BaseModel):
+    timestamp: Optional[str] = None
+    segment_id: str = ""
+    bus_id: str = ""
+    vehicles_in_transit: int = 0
+    avg_occupancy: int = 40
+    eta_to_choke_min: float = 14
+    target_corridor: str = "Ambaji"
+    projected_pressure: Optional[float] = None
+
+    class Config:
+        extra = "allow"
+
+
+class TollIngestPayload(BaseModel):
+    timestamp: Optional[str] = None
+    booth_id: str
+    vehicles_per_min: float = 0
+    target_corridor: Optional[str] = None
+
+    class Config:
+        extra = "allow"
+
+
+class ZoneIngestPayload(BaseModel):
+    timestamp: Optional[str] = None
+    zone_id: str
+    zone_type: str = "BUFFER"
+    location: str = ""
+    utilization_pct: float = 0
+    pax_count: int = 0
+    capacity: int = 1000
+
+    class Config:
+        extra = "allow"
+
+
+class OperatorContextPayload(BaseModel):
+    location: str
+    context: str
+
+
+class ProcessionPayload(BaseModel):
+    location: str
+    name: str = "Manual procession"
+    block_pct: int = 50
+
+
+class AartiPayload(BaseModel):
+    location: str
+    name: str = "Surge Aarti"
+    multiplier: float = 1.7
+
+
+class SmsTestPayload(BaseModel):
+    phone: str = "7698331412"
+    message: str = "TEST: Stampede Predictor SMS gateway check"
 
 
 # ─── Helper: WebSocket Broadcast ─────────────────────────────────────────────
@@ -152,6 +271,14 @@ async def broadcast_state():
     predictions_data = {}
     classifications_data = {}
     flow_rates_data = {}
+    aarti_data = {}
+    calendar_data = {}
+    event_data = {}
+    auspicious_data = {}
+    procession_data = {}
+    anomaly_data = {}
+    counter_flow_data = {}
+    cluster_data = {}
 
     for loc, state in current_state.items():
         pressure_data[loc] = state.get("pressure_index", 0)
@@ -165,6 +292,16 @@ async def broadcast_state():
             "exit": state.get("exit_flow_rate_pax_per_min", 0),
         }
 
+        # Scenario context data
+        aarti_data[loc] = state.get("aarti_context", {})
+        calendar_data[loc] = state.get("calendar_context", {})
+        event_data[loc] = state.get("event_context", {})
+        auspicious_data[loc] = state.get("auspicious_context", {})
+        procession_data[loc] = state.get("procession_status", {})
+        anomaly_data[loc] = state.get("anomaly_data", {})
+        counter_flow_data[loc] = state.get("counter_flow_status", None)
+        cluster_data[loc] = state.get("cluster_data", {})
+
     message = {
         "type": "state_update",
         "data": make_serializable({
@@ -176,6 +313,18 @@ async def broadcast_state():
             "flow_history": {loc: readings[-20:] for loc, readings in flow_history.items()},
             "locations": list(current_state.keys()),
             "timestamp": datetime.now().isoformat(),
+            # Scenario extensions
+            "aarti_context": aarti_data,
+            "calendar_context": calendar_data,
+            "event_context": event_data,
+            "auspicious_context": auspicious_data,
+            "procession_status": procession_data,
+            "anomaly_data": anomaly_data,
+            "counter_flow": counter_flow_data,
+            "cluster_data": cluster_data,
+            "toll_status": get_all_toll_status(),
+            "transit_status": get_all_transit_status(),
+            "zone_status": dict(zone_status),
         }),
     }
 
@@ -192,6 +341,71 @@ async def broadcast_state():
     for client in disconnected:
         if client in connected_clients:
             connected_clients.remove(client)
+
+
+async def sms_escalation_loop():
+    """
+    Background loop: send SMS exactly when due (triggered_at + 60s)
+    if no agency acknowledged by then.
+    """
+    while True:
+        try:
+            changed = False
+            now_ts = datetime.now()
+            conn = get_connection()
+            try:
+                for alert in active_alerts:
+                    if alert.get("status") != "active":
+                        continue
+                    if alert.get("sms_sent"):
+                        continue
+
+                    has_any_ack = bool(alert.get("acknowledgements"))
+                    if has_any_ack and not alert.get("sms_cancelled"):
+                        alert["sms_cancelled"] = True
+                        changed = True
+                        continue
+
+                    due_at_raw = alert.get("sms_due_at")
+                    if not due_at_raw:
+                        continue
+                    try:
+                        due_at = datetime.fromisoformat(due_at_raw)
+                    except Exception:
+                        continue
+
+                    if now_ts < due_at:
+                        continue
+
+                    if has_any_ack:
+                        continue
+
+                    sms_result = await asyncio.to_thread(
+                        notify_authority_sms_for_alert, alert
+                    )
+                    alert["sms_sent"] = bool(sms_result.get("sent"))
+                    alert["sms_sent_at"] = datetime.now().isoformat() if alert["sms_sent"] else None
+                    alert["sms_result"] = sms_result
+                    changed = True
+
+                    insert_event(conn, "sms_escalation", alert.get("location", "unknown"), {
+                        "alert_id": alert.get("id"),
+                        "sent": sms_result.get("sent"),
+                        "provider": sms_result.get("provider"),
+                        "recipient_count": sms_result.get("recipient_count"),
+                        "error": sms_result.get("error"),
+                    })
+            finally:
+                conn.close()
+
+            if changed:
+                await broadcast_state()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[SMS_ESCALATION_LOOP] error: {e}")
+
+        await asyncio.sleep(1.0)
 
 
 # ─── ML Prediction Helper ────────────────────────────────────────────────────
@@ -235,10 +449,14 @@ async def health():
     """Health check endpoint."""
     return {
         "status": "ok",
+        "version": "2.0.0",
         "model_loaded": ml_models is not None,
         "connected_clients": len(connected_clients),
         "active_locations": list(current_state.keys()),
         "active_alerts": len(active_alerts),
+        "scenarios_active": ["S1-Events", "S2-Calendar", "S3-Transit", "S4-Toll",
+                             "S5-Zones", "S6-BlackSwan", "S7-Aarti", "S8-CounterFlow",
+                             "S9-Auspicious", "S10-Procession", "S11-Cluster"],
     }
 
 
@@ -246,86 +464,237 @@ async def health():
 async def ingest(payload: IngestPayload):
     """
     Receive one data row from simulation, process it, and broadcast state.
-    
-    Pipeline:
-      1. Compute pressure index
-      2. Run ML prediction
-      3. Classify crush vs surge
-      4. Check alert trigger
-      5. Store in DB
-      6. Broadcast to all WebSocket clients
+
+    Enhanced pipeline (v2):
+      1. Gather all scenario contexts (S1, S2, S7, S9, S10)
+      2. Compute pressure index with all multipliers + penalties
+      3. Run ML prediction
+      4. Classify crush vs surge + counter-flow (S8) + cluster (S11)
+      5. Detect anomaly (S6)
+      6. Check alert trigger
+      7. Store in DB
+      8. Broadcast enriched state to all WebSocket clients
     """
     row = payload.model_dump()
     location = row["location"]
-    timestamp = row.get("timestamp") or datetime.now().isoformat()
+    timestamp_str = row.get("timestamp") or datetime.now().isoformat()
 
-    # 1. Compute pressure index
-    pressure = compute_pressure_index(row)
+    try:
+        now = datetime.fromisoformat(str(timestamp_str))
+    except (ValueError, TypeError):
+        now = datetime.now()
 
-    # 2. ML predictions
+    date_str = now.strftime("%Y-%m-%d")
+
+    # ── 1. Gather all scenario contexts ────────────────────────────────────
+
+    # S1: External event context
+    event_ctx = get_active_event_context(location, now)
+
+    # S2: Calendar/holiday context
+    calendar_ctx = get_calendar_multiplier(date_str)
+
+    # S7: Aarti timing context
+    aarti_ctx = get_aarti_context(location, now)
+
+    # S9: Auspicious date context
+    auspicious_ctx = get_auspicious_context(location, date_str)
+
+    # S10: Procession status
+    procession_ctx = get_procession_status(location, now)
+
+    # Enrich row with scenario signals for ML prediction
+    row["aarti_active"] = 1 if aarti_ctx["aarti_active"] else 0
+    row["minutes_to_aarti"] = aarti_ctx.get("minutes_to_next", 0) or 0
+    row["calendar_mult"] = calendar_ctx["multiplier"]
+    row["event_mult"] = event_ctx["multiplier"]
+    row["flow_conflict_penalty"] = float(row.get("flow_conflict_penalty", 0))
+    row["density_variance"] = float(row.get("density_variance", 0))
+    row["cluster_flag"] = 0 # Will be updated below
+    row["anomaly_flag"] = 0 # Will be updated below
+
+    # S5: Buffer zone pressure (from latest zone readings)
+    buffer_penalty = 0
+    for zid, zdata in zone_status.items():
+        if zdata.get("location") == location and zdata.get("zone_type") == "BUFFER":
+            buffer_penalty = max(buffer_penalty, compute_combined_zone_pressure(0, zdata.get("utilization_pct", 0)))
+
+    # Build context dict for pressure calculator
+    pressure_context = {
+        "event_mult": event_ctx["multiplier"],
+        "calendar_mult": calendar_ctx["multiplier"],
+        "aarti_mult": aarti_ctx["multiplier"],
+        "auspicious_mult": auspicious_ctx["multiplier"],
+        "buffer_zone_penalty": buffer_penalty,
+        "procession_block_pct": procession_ctx["block_pct"] if procession_ctx["active"] else 0,
+    }
+
+    # If there is already an active alert for this location, we may need to:
+    # - freeze dashboard state for 60s (so operators see stable critical snapshot)
+    # - send SMS escalation after 60s if nobody acknowledged
+    existing_active_alert = next(
+        (a for a in active_alerts if a.get("location") == location and a.get("status") == "active"),
+        None,
+    )
+
+    # ── 2. Compute pressure index with enriched context ────────────────────
+    pressure = compute_pressure_index(row, context=pressure_context)
+
+    # ── 3. ML predictions ──────────────────────────────────────────────────
     ml_result = run_ml_prediction(row)
 
-    # 3. Classify crush vs surge (uses internal history tracking)
+    # ── 4. Classifications ─────────────────────────────────────────────────
     classification = classify_crush_or_surge(location, pressure)
 
-    # 4. Check alert trigger
+    # S8: Counter-flow detection
+    entry_flow = float(row.get("entry_flow_rate_pax_per_min", 0))
+    exit_flow = float(row.get("exit_flow_rate_pax_per_min", 0))
+    corridor_width = float(row.get("corridor_width_m", 4.2))
+    counter_flow_status = detect_counter_flow(entry_flow, exit_flow, corridor_width)
+
+    density_variance = float(row.get("density_variance", 0))
+    cluster_zone_density = float(row.get("cluster_zone_density", 0))
+    avg_density = float(row.get("queue_density_pax_per_m2", 0))
+    cluster_result = detect_cluster_formation(avg_density, density_variance, cluster_zone_density)
+    row["cluster_flag"] = 1 if cluster_result.get("cluster_severity") != "low" else 0
+
+    # S5: Zone cascade detection
+    zone_cascade_status = None
+    max_buffer_util = 0
+    for zid, zdata in zone_status.items():
+        if zdata.get("location") == location and zdata.get("zone_type") == "BUFFER":
+            max_buffer_util = max(max_buffer_util, zdata.get("utilization_pct", 0))
+    if max_buffer_util > 0:
+        zone_cascade_status = detect_zone_cascade(location, max_buffer_util, pressure)
+
+    # ── 5. Anomaly detection (S6) ──────────────────────────────────────────
+    anomaly_result = detect_anomaly(location, pressure)
+    row["anomaly_flag"] = 1 if anomaly_result["anomaly_flag"] else 0
+
+    # Re-run ML prediction with final flags if they were updated
+    ml_result = run_ml_prediction(row)
+
+    # Generate triage if anomaly detected
+    ai_triage = None
+    if anomaly_result["anomaly_flag"]:
+        operator_ctx = get_operator_context(location)
+        ai_triage = get_ai_triage_mock(
+            location, pressure, classification, anomaly_result, operator_ctx
+        )
+
+    # ── 6. Alert trigger check ─────────────────────────────────────────────
     should_alert = (
         pressure >= ALERT_THRESHOLD
         and classification == "GENUINE CRUSH BUILDUP"
     )
 
-    # 5. Update in-memory state
+    # Also trigger for critical anomalies and localized hazards
+    if anomaly_result.get("anomaly_severity") == "critical" and pressure > 60:
+        should_alert = True
+    if counter_flow_status and "CRITICAL" in counter_flow_status:
+        should_alert = True
+    if cluster_result.get("cluster_severity") == "critical":
+        should_alert = True
+
+    # Freeze dashboard state if alert is active and within freeze window.
+    # This ensures pressure/countdown/classification do not immediately fall back
+    # to normal readings while operators are expected to acknowledge.
+    now_ts = datetime.now()
+    freeze_active = False
+    if existing_active_alert and existing_active_alert.get("freeze_until"):
+        try:
+            freeze_until = datetime.fromisoformat(existing_active_alert["freeze_until"])
+            freeze_active = now_ts < freeze_until
+        except Exception:
+            freeze_active = False
+
+    if freeze_active and existing_active_alert.get("snapshot"):
+        snap = existing_active_alert["snapshot"]
+        pressure = float(snap.get("pressure_index", pressure))
+        classification = snap.get("classification", classification)
+        ml_result = {
+            "risk_level": snap.get("risk_level", ml_result.get("risk_level", "Low")),
+            "crush_window_min": snap.get("crush_window_min", ml_result.get("crush_window_min", 15.0)),
+        }
+
+    # ── 7. Update in-memory state ──────────────────────────────────────────
     current_state[location] = {
         "location": location,
-        "timestamp": timestamp,
+        "timestamp": timestamp_str,
         "pressure_index": round(pressure, 2),
         "risk_level": ml_result["risk_level"],
         "crush_window_min": ml_result["crush_window_min"],
         "classification": classification,
-        "entry_flow_rate_pax_per_min": row.get("entry_flow_rate_pax_per_min", 0),
-        "exit_flow_rate_pax_per_min": row.get("exit_flow_rate_pax_per_min", 0),
+        "entry_flow_rate_pax_per_min": entry_flow,
+        "exit_flow_rate_pax_per_min": exit_flow,
         "transport_arrival_burst": row.get("transport_arrival_burst", 0),
-        "queue_density_pax_per_m2": row.get("queue_density_pax_per_m2", 0),
-        "corridor_width_m": row.get("corridor_width_m", 5),
+        "queue_density_pax_per_m2": avg_density,
+        "corridor_width_m": corridor_width,
         "weather": row.get("weather", "Clear"),
         "festival_peak": row.get("festival_peak", 0),
         "vehicle_count": row.get("vehicle_count", 0),
+        # Scenario contexts
+        "aarti_context": aarti_ctx,
+        "calendar_context": calendar_ctx,
+        "event_context": {
+            "label": event_ctx["label"],
+            "multiplier": event_ctx["multiplier"],
+            "event_id": event_ctx.get("event_id"),
+        },
+        "auspicious_context": auspicious_ctx,
+        "procession_status": procession_ctx,
+        "anomaly_data": {
+            **anomaly_result,
+            "ai_triage": ai_triage,
+        },
+        "counter_flow_status": counter_flow_status,
+        "cluster_data": cluster_result,
+        "zone_cascade": zone_cascade_status,
     }
 
     # Track flow history for charts
     if location not in flow_history:
         flow_history[location] = []
     flow_history[location].append({
-        "timestamp": timestamp,
-        "entry": row.get("entry_flow_rate_pax_per_min", 0),
-        "exit": row.get("exit_flow_rate_pax_per_min", 0),
+        "timestamp": timestamp_str,
+        "entry": entry_flow,
+        "exit": exit_flow,
         "pressure": round(pressure, 2),
     })
     # Keep last 50 readings
     if len(flow_history[location]) > 50:
         flow_history[location] = flow_history[location][-50:]
 
-    # 6. Write to DB
+    # ── 8. Write to DB ─────────────────────────────────────────────────────
+    alert_created = None
+    sms_escalation = None
     conn = get_connection()
     try:
         insert_pressure_reading(conn, {
-            "timestamp": timestamp,
+            "timestamp": timestamp_str,
             "location": location,
             "pressure_index": round(pressure, 2),
-            "entry_flow_rate_pax_per_min": row.get("entry_flow_rate_pax_per_min", 0),
-            "exit_flow_rate_pax_per_min": row.get("exit_flow_rate_pax_per_min", 0),
+            "entry_flow_rate_pax_per_min": entry_flow,
+            "exit_flow_rate_pax_per_min": exit_flow,
             "transport_arrival_burst": row.get("transport_arrival_burst", 0),
-            "queue_density_pax_per_m2": row.get("queue_density_pax_per_m2", 0),
+            "queue_density_pax_per_m2": avg_density,
             "risk_level": ml_result["risk_level"],
             "crush_window_min": ml_result["crush_window_min"],
         })
 
-        # Handle alert
-        alert_created = None
+        # Handle alert create
         if should_alert:
-            # Check if there's already an active alert for this location
             existing = [a for a in active_alerts if a["location"] == location and a["status"] == "active"]
             if not existing:
+                # Determine scenario type for agency actions
+                scenario_type = None
+                if anomaly_result.get("anomaly_severity") == "critical":
+                    scenario_type = "black_swan"
+                elif counter_flow_status:
+                    scenario_type = "counter_flow"
+                elif procession_ctx["active"]:
+                    scenario_type = "procession_active"
+
                 alert_id = insert_alert(conn, {
                     "location": location,
                     "pressure_index": round(pressure, 2),
@@ -340,23 +709,50 @@ async def ingest(payload: IngestPayload):
                     "crush_window_min": ml_result["crush_window_min"],
                     "triggered_at": datetime.now().isoformat(),
                     "status": "active",
-                    "agency_actions": get_agency_actions(location),
+                    "agency_actions": get_agency_actions(location, scenario=scenario_type),
                     "acknowledgements": {},
+                    "scenario": scenario_type or "crush_alert",
+                    "anomaly_data": anomaly_result if anomaly_result["anomaly_flag"] else None,
+                    # Freeze + escalation mechanics
+                    "freeze_until": (now_ts + timedelta(seconds=15)).isoformat(),
+                    "sms_due_at": (now_ts + timedelta(seconds=15)).isoformat(),
+                    "sms_sent": False,
+                    "sms_sent_at": None,
+                    "sms_cancelled": False,
+                    "snapshot": {
+                        "pressure_index": round(pressure, 2),
+                        "risk_level": ml_result["risk_level"],
+                        "crush_window_min": ml_result["crush_window_min"],
+                        "classification": classification,
+                        "counter_flow_status": counter_flow_status,
+                        "cluster_data": cluster_result,
+                    },
                 }
                 active_alerts.append(alert_obj)
                 alert_created = alert_obj
 
-                # Log event
                 insert_event(conn, "alert_triggered", location, {
                     "pressure_index": round(pressure, 2),
                     "classification": classification,
                     "crush_window_min": ml_result["crush_window_min"],
                     "alert_id": alert_id,
+                    "scenario": scenario_type,
                 })
+
+                # SMS is NOT sent immediately. It is scheduled for +60s only if nobody acknowledges.
+                sms_escalation = {
+                    "enabled": True,
+                    "scheduled": True,
+                    "due_at": alert_obj["sms_due_at"],
+                    "sent": False,
+                    "provider": "android_sms_gateway",
+                    "error": None,
+                }
+
     finally:
         conn.close()
 
-    # 7. Broadcast to all WebSocket clients
+    # ── 9. Broadcast to all WebSocket clients ──────────────────────────────
     await broadcast_state()
 
     return {
@@ -367,6 +763,16 @@ async def ingest(payload: IngestPayload):
         "crush_window_min": ml_result["crush_window_min"],
         "classification": classification,
         "alert_triggered": alert_created is not None,
+        "sms_escalation": sms_escalation,
+        "context": {
+            "aarti": aarti_ctx.get("aarti_name"),
+            "calendar": calendar_ctx.get("name"),
+            "event": event_ctx.get("label"),
+            "auspicious": auspicious_ctx.get("name"),
+            "procession": procession_ctx.get("name") if procession_ctx["active"] else None,
+            "anomaly": anomaly_result["anomaly_severity"] if anomaly_result["anomaly_flag"] else None,
+            "counter_flow": counter_flow_status,
+        },
     }
 
 
@@ -429,6 +835,10 @@ async def acknowledge(payload: AcknowledgePayload):
         "action_taken": action_taken,
     }
 
+    # Requirement: if acknowledged within 1 minute, do not send SMS escalation.
+    if not alert.get("sms_sent"):
+        alert["sms_cancelled"] = True
+
     # Update agency action card
     if "agency_actions" in alert:
         for action_card in alert["agency_actions"]:
@@ -484,6 +894,8 @@ async def events(
     finally:
         conn.close()
 
+
+# ─── Replay Endpoints ────────────────────────────────────────────────────────
 
 @app.post("/api/replay/start")
 async def replay_start():
@@ -549,3 +961,121 @@ async def get_alerts():
         "alerts": make_serializable(active_alerts),
         "total": len(active_alerts),
     }
+
+
+# ─── S3: Transit Ingest ──────────────────────────────────────────────────────
+
+@app.post("/api/ingest/transit")
+async def ingest_transit(payload: TransitIngestPayload):
+    """S3 — Ingest in-transit bus convoy data and compute projected pressure."""
+    row = payload.model_dump()
+
+    # Compute projected choke pressure
+    prediction = predict_choke_pressure_from_transit(
+        vehicles_in_transit=row["vehicles_in_transit"],
+        avg_occupancy=row["avg_occupancy"],
+        eta_to_choke_min=row["eta_to_choke_min"],
+    )
+
+    # Store latest status
+    update_transit_status(row["target_corridor"], {
+        **prediction,
+        "timestamp": row.get("timestamp") or datetime.now().isoformat(),
+        "segment_id": row.get("segment_id"),
+    })
+
+    # Broadcast updated state
+    await broadcast_state()
+
+    return {"status": "ok", **prediction}
+
+
+# ─── S4: Toll Ingest ─────────────────────────────────────────────────────────
+
+@app.post("/api/ingest/toll")
+async def ingest_toll(payload: TollIngestPayload):
+    """S4 — Ingest toll booth reading and compute surge ratio."""
+    row = payload.model_dump()
+    result = compute_toll_surge_ratio(row["booth_id"], row["vehicles_per_min"])
+
+    # Broadcast updated state
+    await broadcast_state()
+
+    return {"status": "ok", **result}
+
+
+# ─── S5: Zone Ingest ─────────────────────────────────────────────────────────
+
+@app.post("/api/ingest/zone")
+async def ingest_zone(payload: ZoneIngestPayload):
+    """S5 — Ingest buffer zone reading."""
+    row = payload.model_dump()
+
+    zone_status[row["zone_id"]] = {
+        "zone_id": row["zone_id"],
+        "zone_type": row["zone_type"],
+        "location": row["location"],
+        "utilization_pct": row["utilization_pct"],
+        "pax_count": row["pax_count"],
+        "capacity": row["capacity"],
+        "timestamp": row.get("timestamp") or datetime.now().isoformat(),
+    }
+
+    # Broadcast updated state
+    await broadcast_state()
+
+    return {"status": "ok", "zone_id": row["zone_id"], "utilization_pct": row["utilization_pct"]}
+
+
+# ─── S6: Operator Context ────────────────────────────────────────────────────
+
+@app.post("/api/anomaly/context")
+async def anomaly_context(payload: OperatorContextPayload):
+    """S6 — Set operator context for AI triage enrichment."""
+    set_operator_context(payload.location, payload.context)
+    return {"status": "ok", "location": payload.location, "context": payload.context}
+
+
+# ─── S10: Procession Control ─────────────────────────────────────────────────
+
+@app.post("/api/procession/start")
+async def procession_start(payload: ProcessionPayload):
+    """S10 — Operator: start a manual procession at a location."""
+    start_manual_procession(payload.location, payload.name, payload.block_pct)
+    await broadcast_state()
+    return {"status": "ok", "location": payload.location, "name": payload.name, "block_pct": payload.block_pct}
+
+
+@app.post("/api/procession/stop")
+async def procession_stop(payload: ProcessionPayload):
+    """S10 — Operator: stop a manual procession at a location."""
+    stop_manual_procession(payload.location)
+    await broadcast_state()
+    return {"status": "ok", "location": payload.location, "stopped": True}
+
+
+# ─── S7: Aarti Control ───────────────────────────────────────────────────────
+
+@app.post("/api/aarti/start")
+async def aarti_start(payload: AartiPayload):
+    """S7 — Operator: start a manual aarti surge at a location."""
+    from services.aarti_context import start_manual_aarti
+    start_manual_aarti(payload.location, payload.name, payload.multiplier)
+    await broadcast_state()
+    return {"status": "ok", "location": payload.location, "name": payload.name, "multiplier": payload.multiplier}
+
+
+@app.post("/api/aarti/stop")
+async def aarti_stop(payload: AartiPayload):
+    """S7 — Operator: stop manual aarti surge."""
+    from services.aarti_context import stop_manual_aarti
+    stop_manual_aarti(payload.location)
+    await broadcast_state()
+    return {"status": "ok", "location": payload.location, "stopped": True}
+
+
+@app.post("/api/sms/test")
+async def sms_test(payload: SmsTestPayload):
+    """Send a test SMS immediately (no delay)."""
+    result = await asyncio.to_thread(send_sms, payload.phone, payload.message)
+    return {"status": "ok" if result.get("success") else "error", "result": result}
