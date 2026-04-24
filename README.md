@@ -1,4 +1,4 @@
-# Stampede Window Predictor — Lakshya 2.0 (TS-11)
+# Stampede Window Predictor
 
 A real-time crowd pressure intelligence system for pilgrimage corridors that predicts crush risks 8–12 minutes ahead and coordinates responses across agencies on a unified dashboard.
 
